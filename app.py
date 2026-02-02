@@ -78,6 +78,8 @@ def load_data():
         df = pd.read_csv(csv_path)
         df['data_distribuicao_dt'] = pd.to_datetime(df['data_distribuicao'], format='%d/%m/%Y', errors='coerce')
         df['ano_distribuicao'] = df['ano_distribuicao'].astype(str).str.replace('.0', '', regex=False)
+  
+        df['valor_causa'] = df['valor_causa'].astype(str).str.replace(',', '.', regex=False)
         df['valor_causa'] = pd.to_numeric(df['valor_causa'], errors='coerce').fillna(0)
     
     if os.path.exists(json_path):
