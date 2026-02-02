@@ -78,7 +78,11 @@ def load_data():
         df = pd.read_csv(csv_path)
         df['data_distribuicao_dt'] = pd.to_datetime(df['data_distribuicao'], format='%d/%m/%Y', errors='coerce')
         df['ano_distribuicao'] = df['ano_distribuicao'].astype(str).str.replace('.0', '', regex=False)
-  
+
+        # '<' not supported between instances of 'float' and 'str'
+        # ValueError: invalid literal for int() with base 10: 'nan'
+        df['ano_distribuicao'] = pd.to_numeric(df['ano_distribuicao'], errors='coerce').fillna(0).astype(int)
+
         df['valor_causa'] = df['valor_causa'].astype(str).str.replace(',', '.', regex=False)
         df['valor_causa'] = pd.to_numeric(df['valor_causa'], errors='coerce').fillna(0)
     
