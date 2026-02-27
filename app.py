@@ -85,6 +85,15 @@ def load_data():
 
         df['valor_causa'] = df['valor_causa'].astype(str).str.replace(',', '.', regex=False)
         df['valor_causa'] = pd.to_numeric(df['valor_causa'], errors='coerce').fillna(0)
+        
+        def verifica_inicial(num):
+            caminho = os.path.join('iniciais', f"{num}.txt")
+            return "Sim" if os.path.exists(caminho) else "Não"
+            
+        if 'numero_processo' in df.columns:
+            df['tem_inicial'] = df['numero_processo'].apply(verifica_inicial)
+        else:
+            df['tem_inicial'] = "Não"
     
     if os.path.exists(json_path):
         with open(json_path, 'r', encoding='utf-8') as f:
@@ -178,24 +187,101 @@ def main():
     st.markdown("---")
     st.subheader("📋 Detalhes dos Dados")
     cols_to_show = ['cpf_consulta', 'numero_processo', 'assunto', 'classe', 'tribunal', 'data_distribuicao', 'valor_causa', 'partes_polo_passivo']
+    if 'tem_inicial' in filtered_df.columns:
+        cols_to_show.append('tem_inicial')
+        
     st.dataframe(filtered_df[cols_to_show].sort_values('valor_causa', ascending=False), use_container_width=True, hide_index=True)
 
-    # --- SEÇÃO DE CPFS SEM PROCESSOS ---
+    # --- VISUALIZAR INICIAL ---
+    st.markdown("#### 📄 Visualizar Petição Inicial")
+    st.write("Selecione um processo que possui a inicial baixada para visualizar seu conteúdo.")
+    if 'tem_inicial' in filtered_df.columns:
+        processos_com_inicial = filtered_df[filtered_df['tem_inicial'] == 'Sim']['numero_processo'].tolist()
+        if processos_com_inicial:
+            processo_selecionado = st.selectbox("Documentos disponíveis:", ["Nenhum"] + processos_com_inicial)
+            if processo_selecionado != "Nenhum":
+                caminho_inicial = os.path.join('iniciais', f"{processo_selecionado}.txt")
+                if os.path.exists(caminho_inicial):
+                    try:
+                        with open(caminho_inicial, 'r', encoding='utf-8') as f:
+                            conteudo = f.read()
+                        with st.expander(f"Conteúdo da Inicial - {processo_selecionado}", expanded=True):
+                            st.text(conteudo)
+                    except Exception as e:
+                        st.error(f"Erro ao ler arquivo: {e}")
+        else:
+            st.info("Nenhuma inicial disponível nos processos filtrados.")
+
+    # --- SEÇÃO DE CPFS SEM DETERMINADAS AÇÕES ---
     st.markdown("---")
-    st.header("🕵️ Análise de CPFs sem Processos")
+    st.header("🕵️ Análise de Oportunidades (CPFs alvo)")
     if all_searched_cpfs:
-        cpfs_com_processo = set(df['cpf_consulta'].unique())
+        cpfs_com_processo = set(df['cpf_consulta'].dropna().unique())
         cpfs_sem_processo = [cpf for cpf in all_searched_cpfs if cpf not in cpfs_com_processo]
-        cpfs_no_tjgo = set(df[df['tribunal'] == 'TJGO']['cpf_consulta'].unique())
+        
+        cpfs_no_tjgo = set(df[df['tribunal'] == 'TJGO']['cpf_consulta'].dropna().unique())
         cpfs_sem_tjgo = [cpf for cpf in all_searched_cpfs if cpf not in cpfs_no_tjgo]
         
-        t1, t2 = st.tabs(["Nada Encontrado (Geral)", "Nada no TJGO"])
+        # 2. quais CPFs nao tem ações ajuizadas contra 'Goias' ou 'IPASGO'
+        regex_orgaos = 'estado de goias|estado de goiás|ipasgo'
+        processos_goias = df[df['partes_polo_passivo'].str.contains(regex_orgaos, case=False, na=False)]
+        cpfs_com_goias = set(processos_goias['cpf_consulta'].dropna().unique())
+        cpfs_sem_goias = [cpf for cpf in all_searched_cpfs if cpf not in cpfs_com_goias]
+        
+        # 3. dos CPFs com ações contra 'Goias' ou 'IPASGO', filtrar por não conter palavras na inicial
+        st.subheader("Filtro Avançado: Ações contra GO/IPASGO")
+        st.write("Mostra CPFs que **NÃO** possuem ação contra o Estado de Goiás/IPASGO, **OU** que até possuem, mas cujas iniciais **NÃO CONTÊM** palavras-chave negativas (palavras ausentes).")
+        
+        keywords_str = st.text_input("Palavras negativas a buscar (separadas por vírgula):", placeholder="Ex: URV, data-base, quinquênio")
+        
+        cpfs_resultado_avancado = list(cpfs_sem_goias)
+        
+        if keywords_str:
+            keywords = [k.strip().lower() for k in keywords_str.split(',') if k.strip()]
+            
+            with st.spinner("Analisando documentos das iniciais..."):
+                cpfs_analisados = []
+                for cpf in cpfs_com_goias:
+                    acoes_cpf = processos_goias[processos_goias['cpf_consulta'] == cpf]
+                    
+                    tem_acao_com_palavras = False
+                    for _, row in acoes_cpf.iterrows():
+                        num_proc = row['numero_processo']
+                        caminho_inicial = os.path.join('iniciais', f"{num_proc}.txt")
+                        if os.path.exists(caminho_inicial):
+                            try:
+                                with open(caminho_inicial, 'r', encoding='utf-8') as f:
+                                    conteudo = f.read().lower()
+                                    if any(k in conteudo for k in keywords):
+                                        tem_acao_com_palavras = True
+                                        break
+                            except Exception:
+                                pass
+                    
+                    if not tem_acao_com_palavras:
+                        cpfs_analisados.append(cpf)
+                
+                cpfs_resultado_avancado.extend(cpfs_analisados)
+                
+        t1, t2, t3, t4 = st.tabs(["1. 100% Sem Ações", "2. Sem Ações no TJGO", "3. Sem Ações contra GO/IPASGO", "4. Filtro de Iniciais"])
+        
         with t1:
-            st.write(f"Dos **{len(all_searched_cpfs)}** pesquisados, **{len(cpfs_sem_processo)}** sem processos.")
+            st.write(f"Dos **{len(all_searched_cpfs)}** pesquisados, **{len(cpfs_sem_processo)}** estão limpos (zero processos).")
             st.dataframe(pd.DataFrame(cpfs_sem_processo, columns=["CPF"]), use_container_width=True, height=300)
+            
         with t2:
-            st.write(f"Dos **{len(all_searched_cpfs)}** pesquisados, **{len(cpfs_sem_tjgo)}** sem processos no **TJGO**.")
+            st.write(f"Dos **{len(all_searched_cpfs)}** pesquisados, **{len(cpfs_sem_tjgo)}** não possuem processos no TJGO.")
             st.dataframe(pd.DataFrame(cpfs_sem_tjgo, columns=["CPF"]), use_container_width=True, height=300)
+            
+        with t3:
+            st.write(f"Dos **{len(all_searched_cpfs)}** pesquisados, **{len(cpfs_sem_goias)}** não acionaram GO/IPASGO.")
+            st.dataframe(pd.DataFrame(cpfs_sem_goias, columns=["CPF"]), use_container_width=True, height=300)
+            
+        with t4:
+            resultados_unicos = list(set(cpfs_resultado_avancado))
+            st.write(f"Este resultado inclui quem NÃO tem ações contra GO/IPASGO **E** quem até tem, mas cujas iniciais não contêm as palavras indicadas.")
+            st.write(f"Total de CPFs no resultado: **{len(resultados_unicos)}**")
+            st.dataframe(pd.DataFrame(resultados_unicos, columns=["CPF"]), use_container_width=True, height=300)
 
     # Download
     st.markdown("---")
